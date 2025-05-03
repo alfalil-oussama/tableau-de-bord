@@ -1,11 +1,188 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Document</title>
+    <title>Tableau de bord des tâches</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; }
+        .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; }
+        .chart { padding: 15px; border: 1px solid #ddd; margin: 10px; }
+        .filter { margin: 10px 0; }
+    </style>
 </head>
 <body>
+    <h1>Tableau de bord des tâches</h1>
     
+    <div class="filter">
+        <label>Année:
+            <select id="yearSelect">
+                <option value="2020">2020</option>
+                <option value="2021">2021</option>
+                <option value="2022">2022</option>
+                <option value="2023">2023</option>
+                <option value="2024">2024</option>
+            </select>
+        </label>
+    </div>
+
+    <div class="grid">
+        <div class="chart" id="chart4"></div>
+        <div class="chart" id="chart1"></div>
+        <div class="chart" id="chart2"></div>
+        <div class="chart" id="chart3"></div>
+    </div>
+
+<script>
+let employees = [];
+let tasks = [];
+const departmentMap = {
+    'Informatique': 'Développement',
+    'Finance': 'Finances',
+    'Ressources Humaines': 'Ressources Humaines',
+    'Production': 'Soutien',
+    'Marketing': 'Ventes'
+};
+
+// Chargement des données
+Promise.all([
+    fetch('Employés.csv').then(r => r.text()),
+    fetch('Tâches.csv').then(r => r.text())
+]).then(([empData, taskData]) => {
+    employees = Papa.parse(empData, { header: true }).data;
+    tasks = Papa.parse(taskData, { header: true }).data;
+    
+    // Nettoyage et préparation
+    processData();
+    initDashboard();
+});
+
+function processData() {
+    // Conversion des dates et calculs
+    const referenceYear = 2025;
+    
+    employees.forEach(e => {
+        e.date_naissance = new Date(e.date_naissance);
+        const birthYear = e.date_naissance.getFullYear();
+        e.age = referenceYear - birthYear;
+        e.ageGroup = Math.floor(e.age/10)*10;
+        e.department = departmentMap[e.nomDepartement] || 'Autre';
+    });
+    
+    tasks.forEach(t => {
+        t.date_début = new Date(t.date_début);
+        t.year = t.date_début.getFullYear();
+        const emp = employees.find(e => e.id === t.id_employé);
+        t.department = emp?.department || 'Inconnu';
+        t.ageGroup = emp?.ageGroup || 0;
+    });
+}
+
+function updateCharts() {
+    const selectedYear = document.getElementById('yearSelect').value;
+    
+    // Chart 1: Tâches par département (année sélectionnée)
+    const tasksSelectedYear = tasks.filter(t => t.year == selectedYear);
+    const deptCount = tasksSelectedYear.reduce((acc, t) => {
+        acc[t.department] = (acc[t.department] || 0) + 1;
+        return acc;
+    }, {});
+    
+    Plotly.newPlot('chart1', [{
+        x: Object.keys(deptCount),
+        y: Object.values(deptCount),
+        type: 'bar',
+        marker: { color: '#1f77b4' }
+    }], {
+        title: `Tâches par département (${selectedYear})`,
+        xaxis: { title: 'Département' },
+        yaxis: { title: 'Nombre de tâches' }
+    });
+
+    // Chart 2: Tâches par état et tranche d'âge
+    const ageGroups = ['20-29', '30-39', '40-49', '50-59'];
+    const statuses = ['En cours', 'Terminée', 'En attente'];
+    
+    const data = statuses.map(status => ({
+        x: ageGroups,
+        y: ageGroups.map(ag => {
+            const [min, max] = ag.split('-').map(Number);
+            return tasks.filter(t => 
+                t.état === status && 
+                t.ageGroup >= min && 
+                t.ageGroup <= max
+            ).length;
+        }),
+        name: status,
+        type: 'bar'
+    }));
+    
+    Plotly.newPlot('chart2', data, {
+        title: 'Tâches par état et tranche d\'âge',
+        barmode: 'group',
+        xaxis: { title: 'Tranche d\'âge' },
+        yaxis: { title: 'Nombre de tâches' }
+    });
+
+    // Chart 3: Tâches par année et département
+    const years = [2020, 2021, 2022, 2023, 2024];
+    const departments = ['Développement', 'Finances', 'Ressources Humaines', 'Soutien', 'Ventes'];
+    
+    const traces = departments.map(dept => ({
+        x: years,
+        y: years.map(year => 
+            tasks.filter(t => 
+                t.department === dept && 
+                t.year === year
+            ).length
+        ),
+        name: dept,
+        type: 'lines+markers'
+    }));
+    
+    Plotly.newPlot('chart3', traces, {
+        title: 'Tâches par année et département',
+        xaxis: { title: 'Année' },
+        yaxis: { title: 'Nombre de tâches' }
+    });
+    
+    // Chart 4: Âge moyen par département (pour les employés ayant travaillé cette année)
+    const employeeIdsWithTasks = new Set(tasksSelectedYear.map(t => t.id_employé));
+    const filteredEmployees = employees.filter(e => employeeIdsWithTasks.has(e.id));
+    updateAverageAgeChart(filteredEmployees);
+}
+
+function updateAverageAgeChart(data) {
+    const departments = ['Développement', 'Finances', 'Ressources Humaines', 'Soutien', 'Ventes'];
+
+    const avgAges = departments.map(dept => {
+        const deptEmployees = data.filter(e => e.department === dept);
+        return deptEmployees.length > 0 
+            ? Math.round(deptEmployees.reduce((sum, e) => sum + e.age, 0) / deptEmployees.length)
+            : 0;
+    });
+
+    Plotly.react('chart4', [{
+        x: departments,
+        y: avgAges,
+        type: 'bar',
+        marker: { color: '#4CAF50' }
+    }], {
+        title: 'Âge moyen par département',
+        xaxis: { title: 'Département' },
+        yaxis: { 
+            title: 'Âge moyen', 
+            range: [0, 50],
+            dtick: 5
+        }
+    });
+}
+
+function initDashboard() {
+    document.getElementById('yearSelect').addEventListener('change', updateCharts);
+    updateCharts();
+}
+</script>
 </body>
 </html>
